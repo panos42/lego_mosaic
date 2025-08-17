@@ -2,6 +2,7 @@ import streamlit as st
 from PIL import Image, ImageDraw
 import numpy as np
 from collections import Counter
+from sklearn.cluster import KMeans
 
 # -------------------------------------------------
 # LEGO Constants
@@ -44,23 +45,21 @@ lego_palette = [
 # -------------------------------------------------
 # Helper Functions
 # -------------------------------------------------
-def nearest_lego_color(pixel, palette):
-    min_dist = float('inf')
-    closest = palette[0].rgb
-    for color in palette:
-        dist = sum((int(p)-int(c))**2 for p,c in zip(pixel, color.rgb))
-        if dist < min_dist:
-            min_dist = dist
-            closest = color.rgb
-    return closest
+def reduce_palette(img, palette, n_colors):
+    """Cluster image colors and snap to closest LEGO colors (quality control)."""
+    arr = np.array(img).reshape(-1, 3)
+    kmeans = KMeans(n_clusters=n_colors, n_init=5, random_state=42)
+    labels = kmeans.fit_predict(arr)
+    cluster_centers = kmeans.cluster_centers_
 
-def quantize_image_to_lego(img, palette):
-    arr = np.array(img, dtype=np.uint8)
-    h, w, _ = arr.shape
-    for y in range(h):
-        for x in range(w):
-            arr[y, x] = np.array(nearest_lego_color(arr[y, x], palette), dtype=np.uint8)
-    return Image.fromarray(arr)
+    new_pixels = []
+    for c in cluster_centers:
+        # snap to nearest LEGO color
+        lego_rgb = min(palette, key=lambda col: np.linalg.norm(np.array(col.rgb) - c)).rgb
+        new_pixels.append(lego_rgb)
+
+    mapped = np.array([new_pixels[l] for l in labels], dtype=np.uint8)
+    return Image.fromarray(mapped.reshape(img.size[1], img.size[0], 3))
 
 def count_studs(img, palette):
     arr = np.array(img)
@@ -88,20 +87,30 @@ def add_studs_overlay(img, block_size=20, stud_ratio=0.75, stud_type="round"):
             x1, y1 = x0 + block_size, y0 + block_size
             draw.rectangle([x0, y0, x1, y1], fill=color)
 
-            if stud_type != "flat":
+            if stud_type == "round":
                 stud_d = block_size * stud_ratio
                 stud_r = stud_d / 2
                 cx, cy = x0 + block_size / 2, y0 + block_size / 2
                 bbox = [cx - stud_r, cy - stud_r, cx + stud_r, cy + stud_r]
+                highlight = tuple(min(255, int(c * 1.1)) for c in color)
+                draw.ellipse(bbox, fill=highlight, outline=(50, 50, 50))
 
-                if stud_type == "round":
-                    highlight = tuple(min(255, int(c * 1.1)) for c in color)
-                    draw.ellipse(bbox, fill=highlight, outline=(50, 50, 50))
-                elif stud_type == "technic":
-                    draw.ellipse(bbox, fill=color, outline=(50, 50, 50))
-                    hole_r = stud_r * 0.4
-                    hole_bbox = [cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r]
-                    draw.ellipse(hole_bbox, fill=(100, 100, 100))
+            elif stud_type == "technic":
+                stud_d = block_size * stud_ratio
+                stud_r = stud_d / 2
+                cx, cy = x0 + block_size / 2, y0 + block_size / 2
+                bbox = [cx - stud_r, cy - stud_r, cx + stud_r, cy + stud_r]
+                draw.ellipse(bbox, fill=color, outline=(50, 50, 50))
+                hole_r = stud_r * 0.4
+                hole_bbox = [cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r]
+                draw.ellipse(hole_bbox, fill=(100, 100, 100))
+
+            elif stud_type == "rectangle":
+                stud_w = block_size * stud_ratio
+                stud_h = block_size * (stud_ratio * 0.6)
+                cx, cy = x0 + block_size / 2, y0 + block_size / 2
+                bbox = [cx - stud_w/2, cy - stud_h/2, cx + stud_w/2, cy + stud_h/2]
+                draw.rectangle(bbox, fill=color, outline=(50, 50, 50))
 
     return overlay_img, color_counter, w, h
 
@@ -117,7 +126,7 @@ def main():
     studs_w = st.sidebar.number_input("Width (studs)", 20, 500, 100)
     studs_h = st.sidebar.number_input("Height (studs)", 20, 500, 100)
     quality = st.sidebar.selectbox("Quality", ["low", "medium", "high"])
-    stud_type = st.sidebar.selectbox("Stud Type", ["round", "flat", "technic"])
+    stud_type = st.sidebar.selectbox("Stud Type", ["round", "flat", "technic", "rectangle"])
     block_size = st.sidebar.slider("Block size (pixels per stud)", 10, 40, 20)
     stud_ratio = st.sidebar.slider("Stud ratio", 0.5, 1.0, 0.75)
 
@@ -125,11 +134,11 @@ def main():
         img = Image.open(uploaded_file).convert("RGB")
         img_resized = img.resize((studs_w, studs_h), Image.LANCZOS)
 
-        # quality map (just reduces #colors)
-        quality_map = {"low": 3, "medium": 12, "high": len(lego_palette)}
+        # quality map
+        quality_map = {"low": 6, "medium": 12, "high": len(lego_palette)}
         n_colors = quality_map[quality]
 
-        lego_img = quantize_image_to_lego(img_resized, lego_palette)
+        lego_img = reduce_palette(img_resized, lego_palette, n_colors)
 
         overlay_img, color_counter, w, h = add_studs_overlay(
             lego_img,
@@ -140,12 +149,12 @@ def main():
 
         st.image(overlay_img, caption="LEGO Mosaic", use_column_width=True)
 
-        # studs per color
         st.subheader("Studs Required per Color")
-        for color, count in color_counter.items():
-            st.write(f"Color {color}: {count} studs")
+        counts = count_studs(lego_img, lego_palette)
+        for name, count in counts.items():
+            if count > 0:
+                st.write(f"{name}: {count}")
 
-        # real-life size
         st.subheader("Real-life Dimensions")
         width_mm = w * STUD_SIZE_MM
         height_mm = h * STUD_SIZE_MM
@@ -155,7 +164,6 @@ def main():
         height_in = height_mm / 25.4
         st.write(f"{width_m:.2f}m x {height_m:.2f}m ({width_in:.1f}in x {height_in:.1f}in)")
 
-        # download button
         st.download_button(
             "Download Mosaic Image",
             data=overlay_img.tobytes(),
