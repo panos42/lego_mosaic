@@ -133,7 +133,7 @@ def main():
         img = Image.open(uploaded_file).convert("RGB")
         img_resized = img.resize((studs_w, studs_h), Image.LANCZOS)
 
-        quality_map = {"low": 6, "medium": 12, "high": len(lego_palette)}
+        quality_map = {"low": 3, "medium": 6, "high": 12}
         n_colors = quality_map[quality]
 
         lego_img = reduce_palette(img_resized, lego_palette, n_colors)
