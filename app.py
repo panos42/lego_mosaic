@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 from collections import Counter
 from sklearn.cluster import KMeans
+import io
 
 # -------------------------------------------------
 # LEGO Constants
@@ -46,7 +47,6 @@ lego_palette = [
 # Helper Functions
 # -------------------------------------------------
 def reduce_palette(img, palette, n_colors):
-    """Cluster image colors and snap to closest LEGO colors (quality control)."""
     arr = np.array(img).reshape(-1, 3)
     kmeans = KMeans(n_clusters=n_colors, n_init=5, random_state=42)
     labels = kmeans.fit_predict(arr)
@@ -54,7 +54,6 @@ def reduce_palette(img, palette, n_colors):
 
     new_pixels = []
     for c in cluster_centers:
-        # snap to nearest LEGO color
         lego_rgb = min(palette, key=lambda col: np.linalg.norm(np.array(col.rgb) - c)).rgb
         new_pixels.append(lego_rgb)
 
@@ -134,7 +133,6 @@ def main():
         img = Image.open(uploaded_file).convert("RGB")
         img_resized = img.resize((studs_w, studs_h), Image.LANCZOS)
 
-        # quality map
         quality_map = {"low": 6, "medium": 12, "high": len(lego_palette)}
         n_colors = quality_map[quality]
 
@@ -147,7 +145,14 @@ def main():
             stud_type=stud_type
         )
 
-        st.image(overlay_img, caption="LEGO Mosaic", use_column_width=True)
+        # Display scaled preview to avoid huge images
+        preview = overlay_img.copy()
+        max_width = 800
+        if preview.width > max_width:
+            ratio = max_width / preview.width
+            preview = preview.resize((max_width, int(preview.height * ratio)), Image.LANCZOS)
+
+        st.image(preview, caption="LEGO Mosaic Preview", use_column_width=True)
 
         st.subheader("Studs Required per Color")
         counts = count_studs(lego_img, lego_palette)
@@ -164,9 +169,13 @@ def main():
         height_in = height_mm / 25.4
         st.write(f"{width_m:.2f}m x {height_m:.2f}m ({width_in:.1f}in x {height_in:.1f}in)")
 
+        # Download full-size PNG
+        buf = io.BytesIO()
+        overlay_img.save(buf, format="PNG")
+        byte_im = buf.getvalue()
         st.download_button(
-            "Download Mosaic Image",
-            data=overlay_img.tobytes(),
+            "Download Full-Resolution Mosaic",
+            data=byte_im,
             file_name="lego_mosaic.png",
             mime="image/png"
         )
