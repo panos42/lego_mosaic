@@ -1,2 +1,2 @@
-A tool to create mosaic tools easily from an image.
-check it out [here!](legomosaic.streamlit.app)
+A tool to create mosaic tools easily from an image.  
+[Check it out](https://legomosaic.streamlit.app)
